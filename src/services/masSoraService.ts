@@ -379,17 +379,44 @@ export function aggregateAnnualSchedule(
 }
 
 /**
- * Attempts to fetch live MAS rates from public MAS API with robust fallback.
+ * Attempts to fetch live MAS rates from /api/sora gateway, with robust fallbacks.
  */
 export async function fetchLatestMASRates(): Promise<{
   rates: MASRateRecord[];
   isLive: boolean;
   fetchedAt: string;
 }> {
+  // 1. Try our /api/sora serverless endpoint
   try {
-    // Official MAS API endpoint for SORA and Interest Rates
-    // Note: In sandboxed environments or browsers without direct CORS proxy,
-    // this fetch is wrapped in a safe timeout and falls back to official bundled rates.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+    const res = await fetch('/api/sora?limit=40', {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.records && Array.isArray(data.records) && data.records.length > 0) {
+        return {
+          rates: data.records,
+          isLive: true,
+          fetchedAt: new Date().toLocaleTimeString('en-SG', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+      }
+    }
+  } catch (_err) {
+    // Continue to fallback
+  }
+
+  // 2. Fallback to public datastore endpoint if /api/sora is unconfigured or blocked
+  try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3500);
 
@@ -412,7 +439,6 @@ export async function fetchLatestMASRates(): Promise<{
             const rawDate = rec.end_of_day;
             const dateObj = new Date(rawDate);
             const dayOfWeek = isNaN(dateObj.getDay()) ? 1 : dateObj.getDay();
-            // Friday = 5 -> applies for 3 days (Fri, Sat, Sun)
             const dayCount = dayOfWeek === 5 ? 3 : 1;
 
             return {
@@ -440,7 +466,7 @@ export async function fetchLatestMASRates(): Promise<{
       }
     }
   } catch (_err) {
-    // Graceful fallback to verified bundled MAS benchmark cache
+    // Fall back to bundled MAS benchmark cache
   }
 
   return {
